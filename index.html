@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Letras traduzidas</title>
+<style>
+:root{
+  --bg:#f5f3f8;--surface:#ffffff;--text:#1c1a26;--dim:#8a8697;--line:#dcd8e6;--accent:#0b8f7c;--accent-ink:#ffffff;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#14121f;--surface:#1d1a2c;--text:#f1eef7;--dim:#7d7894;--line:#322e47;--accent:#5eead4;--accent-ink:#0b1f1b;color-scheme:dark}
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+header{padding:12px 16px;border-bottom:1px solid var(--line)}
+details summary{cursor:pointer;font-weight:600;list-style:none}
+details summary::-webkit-details-marker{display:none}
+.panel{display:grid;gap:10px;margin-top:12px;max-width:640px}
+label{display:grid;gap:4px;font-size:14px;color:var(--dim)}
+input[type=file],select,textarea{width:100%;font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px}
+textarea{min-height:120px;resize:vertical}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+.row label{flex:1;min-width:130px}
+button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:10px 16px;background:var(--accent);color:var(--accent-ink);cursor:pointer}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+button:focus-visible,summary:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#status{font-size:14px;color:var(--dim);min-height:1.4em}
+main{flex:1;overflow-y:auto;padding:40vh 20px;scroll-behavior:smooth}
+.empty{position:absolute;inset:auto 0 50% 0;text-align:center;color:var(--dim);padding:0 24px}
+.line{max-width:720px;margin:0 auto;padding:10px 0;opacity:.35;transition:opacity .25s;cursor:pointer}
+.line .o{font-size:clamp(20px,4.5vw,30px);font-weight:700;line-height:1.25}
+.line .t{font-size:clamp(16px,3.5vw,22px);color:var(--accent);margin-top:4px;min-height:1.4em}
+.line.on{opacity:1}
+.line.on .o{font-size:clamp(26px,6vw,40px)}
+.line.blank{padding:6px 0}
+footer{padding:10px 16px;border-top:1px solid var(--line);background:var(--surface);display:grid;gap:8px}
+audio{width:100%}
+#syncbar{display:none;gap:8px}
+#syncbar.show{display:flex}
+#syncbar button{flex:1;padding:14px}
+@media (prefers-reduced-motion:reduce){main{scroll-behavior:auto}.line{transition:none}}
+</style>
+</head>
+<body>
+<header>
+  <details open id="setup">
+    <summary>Letras traduzidas — toque para configurar</summary>
+    <div class="panel">
+      <label>1. Música: escolha um arquivo ou cole o link direto do áudio
+        <input type="file" id="audioFile" accept="audio/*">
+        <input type="url" id="audioUrl" placeholder="https://exemplo.com/musica.mp3" inputmode="url" autocomplete="off">
+      </label>
+      <label>2. Letra original (cole abaixo ou carregue um .lrc/.txt)
+        <input type="file" id="lyricsFile" accept=".lrc,.txt,text/plain">
+        <textarea id="lyrics" placeholder="Cole aqui. Com tempos [01:23.45] a sincronia é automática; sem tempos, use o botão Sincronizar."></textarea>
+      </label>
+      <div class="row">
+        <label>Idioma da música
+          <select id="src"></select>
+        </label>
+        <label>Traduzir para
+          <select id="tgt"></select>
+        </label>
+      </div>
+      <div class="row">
+        <button id="go">Carregar e traduzir</button>
+        <button id="syncBtn" class="ghost">Sincronizar tocando</button>
+        <button id="exportBtn" class="ghost">Baixar .lrc</button>
+      </div>
+      <div id="status" role="status"></div>
+    </div>
+  </details>
+</header>
+
+<main id="stage"><p class="empty" id="empty">Escolha uma música e a letra para começar.</p></main>
+
+<footer>
+  <div id="syncbar"><button id="mark">Marcar início da próxima linha (Espaço)</button><button id="stopSync" class="ghost">Concluir</button></div>
+  <audio id="audio" controls></audio>
+</footer>
+
+<script>
+const $ = s => document.querySelector(s);
+const audio = $('#audio'), stage = $('#stage'), statusEl = $('#status');
+const LANGS = {en:'Inglês',es:'Espanhol',fr:'Francês',de:'Alemão',it:'Italiano',ja:'Japonês',ko:'Coreano',pt:'Português'};
+for (const [c, n] of Object.entries(LANGS)) {
+  $('#src').add(new Option(n, c, false, c === 'en'));
+  $('#tgt').add(new Option(n, c, false, c === 'pt'));
+}
+
+let lines = [], els = [], active = -1, syncing = false, syncIdx = 0, runId = 0;
+const say = t => statusEl.textContent = t;
+
+// ---------- Letra ----------
+const TS = /\[(\d+):(\d+(?:[.,]\d+)?)\]/g;
+function parse(text) {
+  const out = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const stamps = [...raw.matchAll(TS)];
+    const txt = raw.replace(/\[[^\]]*\]/g, '').trim();
+    if (stamps.length) stamps.forEach(m => out.push({ t: +m[1] * 60 + parseFloat(m[2].replace(',', '.')), text: txt, tr: '' }));
+    else if (txt) out.push({ t: null, text: txt, tr: '' });
+  }
+  if (out.some(l => l.t != null)) out.sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+  return out;
+}
+
+function spreadEvenly() {
+  if (!lines.length || !lines.every(l => l.t == null) || !isFinite(audio.duration)) return;
+  const step = audio.duration / (lines.length + 1);
+  lines.forEach((l, i) => l.t = step * (i + 0.5));
+  say('Sem tempos na letra: distribuí as linhas igualmente. Use "Sincronizar tocando" para ajustar.');
+}
+
+function render() {
+  stage.innerHTML = '';
+  els = lines.map((l, i) => {
+    const d = document.createElement('div');
+    d.className = 'line' + (l.text ? '' : ' blank');
+    d.innerHTML = '<div class="o"></div><div class="t"></div>';
+    d.firstChild.textContent = l.text;
+    d.lastChild.textContent = l.tr;
+    d.onclick = () => { if (l.t != null && isFinite(l.t)) { audio.currentTime = l.t; } };
+    stage.appendChild(d);
+    return d;
+  });
+  active = -1;
+  tick();
+}
+
+function tick() {
+  const now = audio.currentTime;
+  let idx = -1;
+  for (let i = 0; i < lines.length; i++) { if (lines[i].t != null && lines[i].t <= now) idx = i; else if (lines[i].t != null) break; }
+  if (idx === active) return;
+  els[active]?.classList.remove('on');
+  active = idx;
+  const el = els[idx];
+  if (el) { el.classList.add('on'); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+}
+audio.addEventListener('timeupdate', tick);
+audio.addEventListener('seeked', tick);
+audio.addEventListener('loadedmetadata', () => { spreadEvenly(); });
+
+// ---------- Tradução ----------
+async function chromeTranslator(src, tgt) {
+  if (!('Translator' in self)) return null;
+  try {
+    const a = await Translator.availability({ sourceLanguage: src, targetLanguage: tgt });
+    if (a === 'unavailable') return null;
+    say('Preparando o tradutor do navegador…');
+    return await Translator.create({ sourceLanguage: src, targetLanguage: tgt });
+  } catch (e) { return null; }
+}
+
+async function myMemory(text, src, tgt) {
+  const pair = (c => c === 'pt' ? 'pt-BR' : c)(src) + '|' + (c => c === 'pt' ? 'pt-BR' : c)(tgt);
+  const r = await fetch('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text) + '&langpair=' + encodeURIComponent(pair));
+  const j = await r.json();
+  const out = j?.responseData?.translatedText || '';
+  if (j.responseStatus !== 200 || /MYMEMORY WARNING/i.test(out)) throw new Error('limite');
+  return out;
+}
+
+async function translateAll() {
+  const id = ++runId, src = $('#src').value, tgt = $('#tgt').value;
+  if (src === tgt) { say('Idiomas iguais: nada para traduzir.'); return; }
+  const tr = await chromeTranslator(src, tgt);
+  const cache = new Map();
+  let failed = false;
+  say(tr ? 'Traduzindo no seu aparelho…' : 'Traduzindo via MyMemory (gratuito, com limite diário)…');
+  for (let i = 0; i < lines.length; i++) {
+    if (id !== runId) return;
+    const l = lines[i];
+    if (!l.text) continue;
+    try {
+      if (!cache.has(l.text)) cache.set(l.text, tr ? await tr.translate(l.text) : await myMemory(l.text, src, tgt));
+      l.tr = cache.get(l.text);
+      els[i].lastChild.textContent = l.tr;
+    } catch (e) { failed = true; break; }
+  }
+  say(failed ? 'A tradução parou (limite diário do serviço ou sem internet). Tente de novo mais tarde ou use o Chrome atualizado.' : 'Pronto. Toque em uma linha para pular até ela.');
+}
+
+// ---------- Sincronização manual ----------
+function startSync() {
+  if (!lines.length) { say('Carregue a letra primeiro.'); return; }
+  lines.forEach(l => l.t = null);
+  syncing = true; syncIdx = 0;
+  $('#syncbar').classList.add('show');
+  $('#setup').open = false;
+  audio.currentTime = 0; audio.play();
+  highlightNext();
+}
+function highlightNext() {
+  els.forEach(e => e.classList.remove('on'));
+  const e = els[syncIdx];
+  if (e) { e.classList.add('on'); e.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+}
+function mark() {
+  if (!syncing) return;
+  while (lines[syncIdx] && !lines[syncIdx].text) { lines[syncIdx].t = audio.currentTime; syncIdx++; }
+  if (lines[syncIdx]) { lines[syncIdx].t = audio.currentTime; syncIdx++; }
+  if (syncIdx >= lines.length) return stopSync();
+  highlightNext();
+}
+function stopSync() {
+  syncing = false;
+  $('#syncbar').classList.remove('show');
+  lines.forEach(l => { if (l.t == null) l.t = Infinity; });
+  active = -1; tick();
+  say('Sincronização concluída. Você pode baixar o .lrc para reutilizar.');
+}
+$('#mark').onclick = mark;
+$('#stopSync').onclick = stopSync;
+addEventListener('keydown', e => { if (syncing && e.code === 'Space' && !/TEXTAREA|SELECT/.test(e.target.tagName)) { e.preventDefault(); mark(); } });
+$('#syncBtn').onclick = startSync;
+
+// ---------- Exportar .lrc ----------
+$('#exportBtn').onclick = () => {
+  const f = t => { const m = Math.floor(t / 60), s = (t % 60).toFixed(2).padStart(5, '0'); return `[${String(m).padStart(2, '0')}:${s}]`; };
+  const body = lines.filter(l => isFinite(l.t) && l.t != null).map(l => f(l.t) + l.text).join('\n');
+  if (!body) { say('Nada para exportar ainda.'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([body], { type: 'text/plain' }));
+  a.download = 'letra.lrc'; a.click();
+};
+
+// ---------- Entradas ----------
+$('#audioFile').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  $('#audioUrl').value = '';
+  audio.src = URL.createObjectURL(f);
+  say('Música carregada: ' + f.name);
+};
+function loadUrl() {
+  const u = $('#audioUrl').value.trim();
+  if (!u) return;
+  if (!/^https?:\/\//i.test(u)) { say('O link precisa começar com http:// ou https://.'); return; }
+  if (u.startsWith('http://') && location.protocol === 'https:') { say('Links http:// são bloqueados numa página https://. Use um link https://.'); return; }
+  $('#audioFile').value = '';
+  audio.src = u;
+  audio.load();
+  say('Carregando o áudio do link…');
+}
+$('#audioUrl').addEventListener('change', loadUrl);
+audio.addEventListener('error', () => {
+  if ($('#audioUrl').value.trim()) say('Não consegui tocar esse link. Ele precisa apontar direto para um arquivo de áudio (.mp3, .m4a, .ogg, .wav), não para uma página como YouTube ou Spotify.');
+});
+$('#lyricsFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $('#lyrics').value = await f.text();
+};
+$('#go').onclick = () => {
+  const text = $('#lyrics').value.trim();
+  if (!text) { say('Cole a letra ou carregue um arquivo .lrc.'); return; }
+  const u = $('#audioUrl').value.trim();
+  if (u && audio.src !== u) loadUrl();
+  lines = parse(text);
+  render();
+  spreadEvenly();
+  $('#setup').open = false;
+  translateAll();
+};
+</script>
+</body>
+</html>
